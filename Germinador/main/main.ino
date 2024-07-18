@@ -7,20 +7,25 @@ Titulo: Sistema de Germinacion basado en SOC ESP32
 
 #include <Fuzzy.h>
 #include <SHT1x-ESP.h>
-//Puertos de conexion de la ESP32
+#include <WiFi.h>
+#include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
+
+// Puertos de conexion de la ESP32
 #define dataPin 21
 #define clockPin 23
-
-
 
 // Instancia del sensor SHT10
 SHT1x sht10(dataPin, clockPin, SHT1x::Voltage::DC_3_3v);
 
+// Configuración del WiFi
+const char* ssid = "your_SSID";
+const char* password = "your_PASSWORD";
 
 // Fuzzy
 Fuzzy *fuzzy = new Fuzzy();
-//Entradas del sistema
-//Conjuntos difusos para la temperatura
+// Entradas del sistema
+// Conjuntos difusos para la temperatura
 FuzzySet *cold = new FuzzySet(10, 0, 10, 20);
 FuzzySet *normal = new FuzzySet(25, 15, 25, 35);
 FuzzySet *hot = new FuzzySet(30, 30, 40, 50);
@@ -30,90 +35,125 @@ FuzzySet *dry = new FuzzySet (20, 0, 20, 40);
 FuzzySet *moderate = new FuzzySet (50, 30, 50, 70);
 FuzzySet *wet = new FuzzySet (70, 60, 80, 100);
 
-//Salidas del sistema
-//Conjuntos difusos para velocidad del motor
+// Salidas del sistema
+// Conjuntos difusos para velocidad del motor
 FuzzySet *slow = new FuzzySet(20, 10, 10, 20);
 FuzzySet *average = new FuzzySet(10, 20, 30, 40);
 FuzzySet *fast = new FuzzySet(30, 40, 40, 50);
-//Conjuntos difusos para la apertura de las electro valvulas
+// Conjuntos difusos para la apertura de las electro válvulas
 FuzzySet *low = new FuzzySet(10, 10, 10, 20);
 FuzzySet *mid = new FuzzySet(20, 20, 30, 40);
 FuzzySet *full = new FuzzySet(30, 40, 40, 50);
 
+AsyncWebServer server(80);
 
 void setup()
 {
-   Serial.begin(38400); // Se comienza la comuniciacion serial
-   //Mensaje de inicializacion en caso de no visualizarse en consola revisar configuracion
-   Serial.println("Starting up");
+    Serial.begin(38400); // Se comienza la comunicación serial
+    // Mensaje de inicialización en caso de no visualizarse en consola revisar configuración
+    Serial.println("Starting up");
 
-  //Fuzzificacion de nuestros conjuntos  y creacion de regalas
-  FuzzyInput *temperature = new FuzzyInput(1);
-  temperature->addFuzzySet(cold);
-  temperature->addFuzzySet(normal);
-  temperature->addFuzzySet(hot);
+    // Conexión WiFi
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.println("Connecting to WiFi...");
+    }
+    Serial.println("Connected to WiFi");
 
-  FuzzyInput *humidity = new FuzzyInput(2);
-  humidity->addFuzzySet(dry);
-  humidity->addFuzzySet(moderate);
-  humidity->addFuzzySet(wet);
+    // Configuración del servidor
+    server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
+        // Lectura de los valores del sensor
+        float temperature = sht10.readTemperatureC();
+        float humidity = sht10.readHumidity();
+        fuzzy->setInput(1, temperature);
+        fuzzy->setInput(2, humidity);
+        fuzzy->fuzzify();
 
+        float fanVel = fuzzy->defuzzify(1);
+        float waterC = fuzzy->defuzzify(2);
 
-  FuzzyOutput *velocity = new FuzzyOutput(1);
-  velocity->addFuzzySet(slow);
-  velocity->addFuzzySet(average);
-  velocity->addFuzzySet(fast);
+        // Formateo de los datos en JSON
+        String json;
+        DynamicJsonDocument doc(256);
+        doc["temperature"] = temperature;
+        doc["humidity"] = humidity;
+        doc["velocity"] = fanVel;
+        doc["capacity"] = waterC;
+        doc["timestamp"] = "2023-11-15 09:44:28"; // Puedes actualizar esto con un valor dinámico si tienes un RTC
 
-  FuzzyOutput *flow = new FuzzyOutput(1);
-  velocity->addFuzzySet(low);
-  velocity->addFuzzySet(mid);
-  velocity->addFuzzySet(full);
+        serializeJson(doc, json);
+        request->send(200, "application/json", json);
+    });
 
-  FuzzyRuleAntecedent *temperatureCold = new FuzzyRuleAntecedent();
-  temperatureCold->joinSingle(cold);
+    server.begin();
 
-  FuzzyRuleAntecedent *temperatureNormal = new FuzzyRuleAntecedent();
-  temperatureNormal->joinSingle(normal);
+    // Fuzzificación de nuestros conjuntos y creación de reglas
+    FuzzyInput *temperature = new FuzzyInput(1);
+    temperature->addFuzzySet(cold);
+    temperature->addFuzzySet(normal);
+    temperature->addFuzzySet(hot);
 
-  FuzzyRuleAntecedent *temperatureHot = new FuzzyRuleAntecedent();
-  temperatureHot->joinSingle(hot);
+    FuzzyInput *humidity = new FuzzyInput(2);
+    humidity->addFuzzySet(dry);
+    humidity->addFuzzySet(moderate);
+    humidity->addFuzzySet(wet);
 
-  FuzzyRuleAntecedent *humidityDry = new FuzzyRuleAntecedent();
-  humidityDry->joinSingle(dry);
+    FuzzyOutput *velocity = new FuzzyOutput(1);
+    velocity->addFuzzySet(slow);
+    velocity->addFuzzySet(average);
+    velocity->addFuzzySet(fast);
 
-  FuzzyRuleAntecedent *humidityModerate = new FuzzyRuleAntecedent();
-  humidityModerate->joinSingle(moderate);
+    FuzzyOutput *flow = new FuzzyOutput(2);
+    flow->addFuzzySet(low);
+    flow->addFuzzySet(mid);
+    flow->addFuzzySet(full);
 
-  FuzzyRuleAntecedent *humidityWet = new FuzzyRuleAntecedent();
-  humidityWet->joinSingle(wet);
+    FuzzyRuleAntecedent *temperatureCold = new FuzzyRuleAntecedent();
+    temperatureCold->joinSingle(cold);
 
-  //Creando las reglas difusas del sistema
-  FuzzyRuleAntecedent *temperatureColdAndHumidityDry = new FuzzyRuleAntecedent();
-  temperatureColdAndHumidityDry->joinWithAND(temperatureCold, humidityDry);
+    FuzzyRuleAntecedent *temperatureNormal = new FuzzyRuleAntecedent();
+    temperatureNormal->joinSingle(normal);
 
-  FuzzyRuleAntecedent *temperatureColdAndHumidityModerate = new FuzzyRuleAntecedent();
-  temperatureColdAndHumidityModerate->joinWithAND(temperatureCold, humidityModerate);
+    FuzzyRuleAntecedent *temperatureHot = new FuzzyRuleAntecedent();
+    temperatureHot->joinSingle(hot);
 
-  FuzzyRuleAntecedent *temperatureColdAndHumidityWet = new FuzzyRuleAntecedent();
-  temperatureColdAndHumidityWet->joinWithAND(temperatureCold, humidityWet);
+    FuzzyRuleAntecedent *humidityDry = new FuzzyRuleAntecedent();
+    humidityDry->joinSingle(dry);
 
-  FuzzyRuleAntecedent *temperatureNormalAndHumidityDry = new FuzzyRuleAntecedent();
-  temperatureNormalAndHumidityDry->joinWithAND(temperatureNormal, humidityDry);
+    FuzzyRuleAntecedent *humidityModerate = new FuzzyRuleAntecedent();
+    humidityModerate->joinSingle(moderate);
 
-  FuzzyRuleAntecedent *temperatureNormalAndHumidityModerate = new FuzzyRuleAntecedent();
-  temperatureNormalAndHumidityModerate->joinWithAND(temperatureNormal, humidityModerate);
+    FuzzyRuleAntecedent *humidityWet = new FuzzyRuleAntecedent();
+    humidityWet->joinSingle(wet);
 
-  FuzzyRuleAntecedent *temperatureNormalAndHumidityWet = new FuzzyRuleAntecedent();
-  temperatureNormalAndHumidityWet->joinWithAND(temperatureNormal, humidityWet);
+    // Creando las reglas difusas del sistema
+    FuzzyRuleAntecedent *temperatureColdAndHumidityDry = new FuzzyRuleAntecedent();
+    temperatureColdAndHumidityDry->joinWithAND(temperatureCold, humidityDry);
 
-  FuzzyRuleAntecedent *temperatureHotAndHumidityDry = new FuzzyRuleAntecedent();
-  temperatureHotAndHumidityDry->joinWithAND(temperatureHot, humidityDry);
+    FuzzyRuleAntecedent *temperatureColdAndHumidityModerate = new FuzzyRuleAntecedent();
+    temperatureColdAndHumidityModerate->joinWithAND(temperatureCold, humidityModerate);
 
-  FuzzyRuleAntecedent *temperatureHotAndHumidityModerate = new FuzzyRuleAntecedent();
-  temperatureHotAndHumidityModerate->joinWithAND(temperatureHot, humidityModerate);
+    FuzzyRuleAntecedent *temperatureColdAndHumidityWet = new FuzzyRuleAntecedent();
+    temperatureColdAndHumidityWet->joinWithAND(temperatureCold, humidityWet);
 
-  FuzzyRuleAntecedent *temperatureHotAndHumidityWet = new FuzzyRuleAntecedent();
-  temperatureHotAndHumidityWet->joinWithAND(temperatureHot, humidityWet);
+    FuzzyRuleAntecedent *temperatureNormalAndHumidityDry = new FuzzyRuleAntecedent();
+    temperatureNormalAndHumidityDry->joinWithAND(temperatureNormal, humidityDry);
+
+    FuzzyRuleAntecedent *temperatureNormalAndHumidityModerate = new FuzzyRuleAntecedent();
+    temperatureNormalAndHumidityModerate->joinWithAND(temperatureNormal, humidityModerate);
+
+    FuzzyRuleAntecedent *temperatureNormalAndHumidityWet = new FuzzyRuleAntecedent();
+    temperatureNormalAndHumidityWet->joinWithAND(temperatureNormal, humidityWet);
+
+    FuzzyRuleAntecedent *temperatureHotAndHumidityDry = new FuzzyRuleAntecedent();
+    temperatureHotAndHumidityDry->joinWithAND(temperatureHot, humidityDry);
+
+    FuzzyRuleAntecedent *temperatureHotAndHumidityModerate = new FuzzyRuleAntecedent();
+    temperatureHotAndHumidityModerate->joinWithAND(temperatureHot, humidityModerate);
+
+    FuzzyRuleAntecedent *temperatureHotAndHumidityWet = new FuzzyRuleAntecedent();
+    temperatureHotAndHumidityWet->joinWithAND(temperatureHot, humidityWet);
 
     // Crear los consecuentes difusos para las reglas
     FuzzyRuleConsequent *thenVelocitySlow = new FuzzyRuleConsequent();
@@ -178,36 +218,34 @@ void setup()
     fuzzy->addFuzzyRule(rule16);
     fuzzy->addFuzzyRule(rule17);
     fuzzy->addFuzzyRule(rule18);
-
-
 }
 
 void loop()
 {
-  float temperature;
-  float humidity;
+    float temperature;
+    float humidity;
 
-  // Lectura de los valores del sensor
-  temperature = sht10.readTemperatureC();
-  humidity = sht10.readHumidity();
+    // Lectura de los valores del sensor
+    temperature = sht10.readTemperatureC();
+    humidity = sht10.readHumidity();
 
-  fuzzy->setInput(1, temperature);
-  fuzzy->setInput(2, humidity);
-  fuzzy->fuzzify();
+    fuzzy->setInput(1, temperature);
+    fuzzy->setInput(2, humidity);
+    fuzzy->fuzzify();
 
-  float fanVel = fuzzy->defuzzify(1);
-  float waterC = fuzzy->defuzzify(2);
-  // Mandamos los valores al monitor serie para comprobar el funcionamiento
-  Serial.print("Temperature: ");
-  Serial.print(temperature, DEC);
-  Serial.print("C / ");
-  Serial.print(humidity);
-  Serial.println("%");
-  Serial.print("Motor: ");
-  Serial.print(fanVel);
-  Serial.print("  Caudal");
-  Serial.print(waterC);
-  Serial.println("%");
+    float fanVel = fuzzy->defuzzify(1);
+    float waterC = fuzzy->defuzzify(2);
+    // Mandamos los valores al monitor serie para comprobar el funcionamiento
+    Serial.print("Temperature: ");
+    Serial.print(temperature, DEC);
+    Serial.print("C / ");
+    Serial.print(humidity);
+    Serial.println("%");
+    Serial.print("Motor: ");
+    Serial.print(fanVel);
+    Serial.print("  Caudal: ");
+    Serial.print(waterC);
+    Serial.println("%");
 
-  delay(2000);
+    delay(2000);
 }
