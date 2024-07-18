@@ -1,91 +1,101 @@
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, render_template, jsonify
+import requests
 import json
+import threading
+import time
+from apscheduler.schedulers.background import BackgroundScheduler
+from flask_socketio import SocketIO
 import matplotlib.pyplot as plt
-from io import BytesIO
+import io
+import base64
 from datetime import datetime
 
 app = Flask(__name__)
+socketio = SocketIO(app)
+scheduler = BackgroundScheduler()
 
-# Almacenar los datos en un diccionario con timestamp
-json_file = {}
+# Diccionario para almacenar datos de múltiples ESP32
+data = {}
 
-# Endpoint para recibir datos y almacenarlos en un diccionario con timestamp
-@app.route('/recivedata', methods=['POST'])
-def receive_data():
-    try:
-        data = request.get_json()
+# Lista de direcciones IP de los ESP32
+esp32_ips = ["http://esp32_1_ip/status", "http://esp32_2_ip/status"]
 
-        # Agregar timestamp a los datos
-        data['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-        # Cargar datos existentes desde el archivo JSON
+def fetch_data():
+    for ip in esp32_ips:
         try:
-            with open('data.json', 'r') as json_file:
-                data_dict = json.load(json_file)
-        except FileNotFoundError:
-            data_dict = {}
+            response = requests.get(ip)
+            if response.status_code == 200:
+                json_data = response.json()
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                if ip not in data:
+                    data[ip] = []
+                data[ip].append({
+                    "timestamp": timestamp,
+                    "temperature": json_data["temperature"],
+                    "humidity": json_data["humidity"],
+                    "velocity": json_data["velocity"],
+                    "capacity": json_data["capacity"]
+                })
+                # Emitir datos a los clientes conectados
+                socketio.emit('new_data', {"ip": ip, "data": data[ip][-1]})
+        except Exception as e:
+            print(f"Error fetching data from {ip}: {e}")
 
-        # Agregar datos al diccionario
-        for key, value in data.items():
-            if key not in data_dict:
-                data_dict[key] = []
-            data_dict[key].append({'timestamp': data['timestamp'], 'value': value})
+scheduler.add_job(fetch_data, 'interval', minutes=1)
+scheduler.start()
 
-        # Guardar los datos en el archivo JSON
-        with open('data.json', 'w') as json_file:
-            json.dump(data_dict, json_file, indent=4)  # indent=4 para formato legible
+@app.route('/')
+def index():
+    return render_template('index.html', data=data)
 
-        return jsonify({'message': 'Data received and saved successfully'}), 201
+@app.route('/data/<ip>')
+def get_data(ip):
+    if ip in data:
+        return jsonify(data[ip])
+    else:
+        return jsonify([])
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+@app.route('/plot/<ip>')
+def plot_data(ip):
+    if ip in data:
+        timestamps = [entry['timestamp'] for entry in data[ip]]
+        temperatures = [entry['temperature'] for entry in data[ip]]
+        humidities = [entry['humidity'] for entry in data[ip]]
+        velocities = [entry['velocity'] for entry in data[ip]]
+        capacities = [entry['capacity'] for entry in data[ip]]
 
+        plt.figure(figsize=(10, 5))
+        
+        plt.subplot(2, 2, 1)
+        plt.plot(timestamps, temperatures, label='Temperature (C)')
+        plt.xticks(rotation=45)
+        plt.legend()
 
-# Endpoint para trazar los datos de una variable específica en función del tiempo
-@app.route('/plot/<variable>', methods=['GET'])
-def plot_variable(variable):
-    try:
-        with open('data.json', 'r') as json_file:
-            # Cargar los datos del archivo JSON en un diccionario
-            data_dict = json.load(json_file)
+        plt.subplot(2, 2, 2)
+        plt.plot(timestamps, humidities, label='Humidity (%)')
+        plt.xticks(rotation=45)
+        plt.legend()
 
-            # Obtener los datos de la variable específica del diccionario
-            if variable not in data_dict:
-                return jsonify({'error': f'Data for {variable} not found'}), 404
+        plt.subplot(2, 2, 3)
+        plt.plot(timestamps, velocities, label='Velocity')
+        plt.xticks(rotation=45)
+        plt.legend()
 
-            data = data_dict[variable]
+        plt.subplot(2, 2, 4)
+        plt.plot(timestamps, capacities, label='Capacity (%)')
+        plt.xticks(rotation=45)
+        plt.legend()
 
-            # Extraer timestamps y valores para trazar
-            timestamps = [entry['timestamp'] for entry in data]
-            values = [entry['value'] for entry in data]
+        plt.tight_layout()
 
-            # Convertir timestamps a objetos de datetime para trazar
-            timestamps = [datetime.strptime(ts, '%Y-%m-%d %H:%M:%S') for ts in timestamps]
+        img = io.BytesIO()
+        plt.savefig(img, format='png')
+        img.seek(0)
+        plot_url = base64.b64encode(img.getvalue()).decode()
 
-            # Ordenar los datos por timestamp
-            sorted_indices = sorted(range(len(timestamps)), key=lambda k: timestamps[k])
-            timestamps = [timestamps[i] for i in sorted_indices]
-            values = [values[i] for i in sorted_indices]
-
-            # Plotear los datos
-            plt.plot(timestamps, values, marker='o')
-            plt.xlabel('Timestamp')
-            plt.ylabel(variable.capitalize())
-            plt.title(f'{variable.capitalize()} Over Time')
-            plt.xticks(rotation=45)
-            plt.tight_layout()
-
-            # Guardar el gráfico en un objeto BytesIO en formato PNG
-            img_stream = BytesIO()
-            plt.savefig(img_stream, format='png')
-            img_stream.seek(0)
-            plt.close()
-
-            # Devolver la imagen como respuesta
-            return send_file(img_stream, mimetype='image/png')
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return f'<img src="data:image/png;base64,{plot_url}" />'
+    else:
+        return 'No data available for this IP.'
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    socketio.run(app, debug=True)
