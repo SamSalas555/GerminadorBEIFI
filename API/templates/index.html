@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ESP32 Data Visualization</title>
+    <!-- Agregar Bootstrap -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            background-color: #F5EFFF;
+        }
+        .header-container {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .header-container h1 {
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <!-- Encabezado centrado -->
+        <div class="header-container">
+            <h1>Visualización de Datos del ESP32</h1>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <canvas id="dataChart" width="800" height="400"></canvas>
+            </div>
+        </div>
+        <div class="mt-4">
+            <h2>Datos en Tiempo Real</h2>
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Temperatura (°C)</th>
+                        <th>Humedad (%)</th>
+                    </tr>
+                </thead>
+                <tbody id="dataTable"></tbody>
+            </table>
+        </div>
+    </div>
+    <footer class="mt-4 text-center text-muted">
+        <p>Dr. Julio Cesar Sosa Saavedra | Sistema de Germinación | 2025</p>
+    </footer>
+    <script>
+        const ctx = document.getElementById('dataChart').getContext('2d');
+        const dataChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], // Timestamps
+                datasets: [
+                    {
+                        label: 'Temperatura (°C)',
+                        data: [],
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        borderWidth: 2,
+                        fill: false, // No colorear
+                        pointRadius: 5,
+                        pointBackgroundColor: 'rgba(255, 99, 132, 1)'
+                    },
+                    {
+                        label: 'Humedad (%)',
+                        data: [],
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 2,
+                        fill: false, // No colorear
+                        pointRadius: 5,
+                        pointBackgroundColor: 'rgba(54, 162, 235, 1)'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Timestamp'
+                        }
+                    },
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'Valor'
+                        }
+                    }
+                }
+            }
+        });
+
+        async function fetchData() {
+            const response = await fetch('/api/data');
+            const result = await response.json();
+            const deviceName = Object.keys(result)[0];
+            const deviceData = result[deviceName];
+
+            const timestamps = deviceData.map(entry => entry.timestamp);
+            const temperatures = deviceData.map(entry => entry.temperature);
+            const humidities = deviceData.map(entry => entry.humidity);
+
+            dataChart.data.labels = timestamps;
+            dataChart.data.datasets[0].data = temperatures;
+            dataChart.data.datasets[1].data = humidities;
+
+            dataChart.update();
+
+            // Actualizar la tabla
+            const tableBody = document.getElementById('dataTable');
+            tableBody.innerHTML = ''; // Limpiar la tabla
+            deviceData.slice(-10).forEach(entry => {
+                const row = `<tr>
+                    <td>${entry.timestamp}</td>
+                    <td>${entry.temperature.toFixed(2)}</td>
+                    <td>${entry.humidity.toFixed(2)}</td>
+                </tr>`;
+                tableBody.innerHTML += row;
+            });
+        }
+
+        setInterval(fetchData, 5000);
+    </script>
+</body>
+</html>

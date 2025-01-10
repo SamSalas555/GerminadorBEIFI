@@ -19,8 +19,8 @@ Titulo: Sistema de Germinacion basado en SOC ESP32
 SHT1x sht10(dataPin, clockPin, SHT1x::Voltage::DC_3_3v);
 
 // Configuración del WiFi
-const char* ssid = "your_SSID";
-const char* password = "your_PASSWORD";
+const char* ssid = "IZZI-B026_plus";
+const char* password = "C863FC2DB026";
 
 // Fuzzy
 Fuzzy *fuzzy = new Fuzzy();
@@ -40,6 +40,7 @@ FuzzySet *wet = new FuzzySet (70, 60, 80, 100);
 FuzzySet *slow = new FuzzySet(20, 10, 10, 20);
 FuzzySet *average = new FuzzySet(10, 20, 30, 40);
 FuzzySet *fast = new FuzzySet(30, 40, 40, 50);
+
 // Conjuntos difusos para la apertura de las electro válvulas
 FuzzySet *low = new FuzzySet(10, 10, 10, 20);
 FuzzySet *mid = new FuzzySet(20, 20, 30, 40);
@@ -60,6 +61,9 @@ void setup()
         Serial.println("Connecting to WiFi...");
     }
     Serial.println("Connected to WiFi");
+
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP()); // Obtiene y muestra la dirección IP
 
     // Configuración del servidor
     server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
